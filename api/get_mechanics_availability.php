@@ -40,8 +40,7 @@ try {
             m.specialty,
             m.max_daily_slots,
             m.status,
-            COALESCE(app_count.booked_slots, 0) AS booked_slots,
-            GREATEST(0, m.max_daily_slots - COALESCE(app_count.booked_slots, 0)) AS available_slots
+            COALESCE(app_count.booked_slots, 0) AS booked_slots
         FROM mechanics m
         LEFT JOIN (
             SELECT 
@@ -65,11 +64,11 @@ try {
     $stmt->execute();
     $mechanics = $stmt->fetchAll();
 
-    // Map each mechanic with helper flags
+    // Calculate available slots safely in PHP for universal MySQL / SQLite compatibility
     $formattedMechanics = array_map(function($mech) {
         $max = (int)$mech['max_daily_slots'];
         $booked = (int)$mech['booked_slots'];
-        $available = (int)$mech['available_slots'];
+        $available = max(0, $max - $booked);
 
         return [
             'id'              => (int)$mech['id'],
@@ -85,6 +84,7 @@ try {
     sendJsonResponse([
         'success'   => true,
         'date'      => $dateStr,
+        'driver'    => getDbDriver(),
         'mechanics' => $formattedMechanics
     ]);
 

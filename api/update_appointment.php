@@ -71,10 +71,11 @@ if (!empty($errors)) {
 
 try {
     $db = getDbConnection();
+    $forUpdate = (getDbDriver() === 'mysql') ? 'FOR UPDATE' : '';
     $db->beginTransaction();
 
     // 1. Fetch current appointment record
-    $appStmt = $db->prepare("SELECT * FROM appointments WHERE id = :id FOR UPDATE");
+    $appStmt = $db->prepare("SELECT * FROM appointments WHERE id = :id {$forUpdate}");
     $appStmt->execute([':id' => $appointmentId]);
     $currentApp = $appStmt->fetch();
 
@@ -87,7 +88,7 @@ try {
     }
 
     // 2. Fetch target mechanic
-    $mechStmt = $db->prepare("SELECT id, name, max_daily_slots, status FROM mechanics WHERE id = :id FOR UPDATE");
+    $mechStmt = $db->prepare("SELECT id, name, max_daily_slots, status FROM mechanics WHERE id = :id {$forUpdate}");
     $mechStmt->execute([':id' => $mechanicId]);
     $mechanic = $mechStmt->fetch();
 
@@ -104,8 +105,7 @@ try {
 
     // If final status is not cancelled, enforce duplicate booking & capacity constraints
     if ($finalStatus !== 'cancelled') {
-        // 3. Rule: Check duplicate booking for the client on the new date
-        // Must exclude the current appointment ID!
+        // 3. Rule: Check duplicate booking for the client on the new date (excluding current appointment)
         $dupStmt = $db->prepare("
             SELECT id, client_name 
             FROM appointments 
@@ -114,7 +114,7 @@ try {
               AND id != :current_id
               AND (client_phone = :phone OR car_license_no = :license)
             LIMIT 1
-            FOR UPDATE
+            {$forUpdate}
         ");
         $dupStmt->execute([
             ':app_date'   => $appointmentDate,
@@ -136,7 +136,6 @@ try {
         }
 
         // 4. Rule: Enforce Mechanic Capacity (Max 4 per mechanic per day)
-        // Count active appointments for the target mechanic on that date, excluding current appointment
         $capStmt = $db->prepare("
             SELECT COUNT(*) AS booked_count 
             FROM appointments 
@@ -144,7 +143,7 @@ try {
               AND appointment_date = :app_date 
               AND status != 'cancelled'
               AND id != :current_id
-            FOR UPDATE
+            {$forUpdate}
         ");
         $capStmt->execute([
             ':mechanic_id' => $mechanicId,
@@ -166,6 +165,7 @@ try {
     }
 
     // 5. Update Appointment
+    $nowStr = date('Y-m-d H:i:s');
     $updateStmt = $db->prepare("
         UPDATE appointments 
         SET 
@@ -173,7 +173,7 @@ try {
             mechanic_id      = :mechanic_id,
             status           = :status,
             notes            = :notes,
-            updated_at       = CURRENT_TIMESTAMP
+            updated_at       = :updated_at
         WHERE id = :id
     ");
 
@@ -182,6 +182,7 @@ try {
         ':mechanic_id' => $mechanicId,
         ':status'      => $finalStatus,
         ':notes'       => ($notes !== null) ? $notes : $currentApp['notes'],
+        ':updated_at'  => $nowStr,
         ':id'          => $appointmentId
     ]);
 

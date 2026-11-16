@@ -4,7 +4,7 @@
  * Method: POST
  * 
  * Validates user input, checks capacity limits, prevents duplicate bookings,
- * and saves appointment into MySQL using PDO transactions.
+ * and saves appointment into database using transactions.
  */
 
 require_once __DIR__ . '/../config/db.php';
@@ -52,7 +52,6 @@ if (empty($clientAddress)) {
 if (empty($clientPhone)) {
     $errors['client_phone'] = 'Phone number is required.';
 } else {
-    // Phone must be numbers only
     if (!ctype_digit($clientPhone)) {
         $errors['client_phone'] = 'Phone number must contain numbers only.';
     } elseif (strlen($clientPhone) < 7 || strlen($clientPhone) > 15) {
@@ -69,7 +68,6 @@ if (empty($carLicenseNo)) {
 if (empty($carEngineNo)) {
     $errors['car_engine_no'] = 'Car Engine Number is required.';
 } else {
-    // Engine number must be numbers only
     if (!ctype_digit($carEngineNo)) {
         $errors['car_engine_no'] = 'Car Engine Number must contain numbers only.';
     } elseif (strlen($carEngineNo) < 4 || strlen($carEngineNo) > 50) {
@@ -110,12 +108,13 @@ if (!empty($errors)) {
 
 try {
     $db = getDbConnection();
+    $forUpdate = (getDbDriver() === 'mysql') ? 'FOR UPDATE' : '';
 
-    // Start Transaction to guarantee atomicity and race condition safety
+    // Start Transaction
     $db->beginTransaction();
 
     // Verify mechanic exists and is active
-    $mechStmt = $db->prepare("SELECT id, name, max_daily_slots, status FROM mechanics WHERE id = :id FOR UPDATE");
+    $mechStmt = $db->prepare("SELECT id, name, max_daily_slots, status FROM mechanics WHERE id = :id {$forUpdate}");
     $mechStmt->execute([':id' => $mechanicId]);
     $mechanic = $mechStmt->fetch();
 
@@ -132,7 +131,6 @@ try {
 
     // 4. Rule: Prevent Duplicate Bookings
     // "Clients cannot book more than once on the same date."
-    // A client is identified by their phone number or car license registration
     $dupCheckStmt = $db->prepare("
         SELECT id, client_name, client_phone, car_license_no 
         FROM appointments 
@@ -140,7 +138,7 @@ try {
           AND status != 'cancelled'
           AND (client_phone = :phone OR car_license_no = :license)
         LIMIT 1
-        FOR UPDATE
+        {$forUpdate}
     ");
     $dupCheckStmt->execute([
         ':app_date' => $appointmentDate,
@@ -165,14 +163,13 @@ try {
     }
 
     // 5. Rule: Enforce Capacity (Max 4 appointments per mechanic per day)
-    // "Reject booking if the chosen mechanic already has 4 appointments on that date."
     $capacityStmt = $db->prepare("
         SELECT COUNT(*) AS booked_count 
         FROM appointments 
         WHERE mechanic_id = :mechanic_id 
           AND appointment_date = :app_date 
           AND status != 'cancelled'
-        FOR UPDATE
+        {$forUpdate}
     ");
     $capacityStmt->execute([
         ':mechanic_id' => $mechanicId,
@@ -215,7 +212,6 @@ try {
     // Commit Transaction
     $db->commit();
 
-    // Calculate remaining slots after this booking
     $remainingSlots = $maxDailySlots - ($bookedCount + 1);
 
     sendJsonResponse([

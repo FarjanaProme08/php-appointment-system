@@ -73,15 +73,17 @@ try {
     $stmt->execute();
     $appointments = $stmt->fetchAll();
 
-    // Summary statistics for dashboard cards
-    $statsStmt = $db->query("
+    // Summary statistics for dashboard cards using parameterized today's date
+    $todayStr = date('Y-m-d');
+    $statsStmt = $db->prepare("
         SELECT 
             COUNT(*) AS total_count,
-            SUM(CASE WHEN appointment_date = CURDATE() AND status != 'cancelled' THEN 1 ELSE 0 END) AS today_count,
-            SUM(CASE WHEN appointment_date > CURDATE() AND status != 'cancelled' THEN 1 ELSE 0 END) AS upcoming_count,
+            SUM(CASE WHEN appointment_date = :today AND status != 'cancelled' THEN 1 ELSE 0 END) AS today_count,
+            SUM(CASE WHEN appointment_date > :today AND status != 'cancelled' THEN 1 ELSE 0 END) AS upcoming_count,
             SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed_count
         FROM appointments
     ");
+    $statsStmt->execute([':today' => $todayStr]);
     $stats = $statsStmt->fetch() ?: [
         'total_count' => 0,
         'today_count' => 0,
@@ -91,6 +93,7 @@ try {
 
     sendJsonResponse([
         'success'      => true,
+        'driver'       => getDbDriver(),
         'count'        => count($appointments),
         'stats'        => [
             'total'     => (int)$stats['total_count'],
