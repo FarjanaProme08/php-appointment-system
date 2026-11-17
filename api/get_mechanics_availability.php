@@ -1,6 +1,7 @@
 <?php
 /**
  * API: Get Mechanics and Remaining Available Slots for a Given Date
+ * Also returns active discount promotion for that date if configured.
  * 
  * Query parameters:
  *  - date (string, YYYY-MM-DD): The target appointment date
@@ -32,7 +33,6 @@ try {
     }
 
     // Query 5 mechanics and count active appointments on the given date
-    // If exclude_appointment_id is passed, exclude that appointment from the count
     $sql = "
         SELECT 
             m.id,
@@ -64,7 +64,6 @@ try {
     $stmt->execute();
     $mechanics = $stmt->fetchAll();
 
-    // Calculate available slots safely in PHP for universal MySQL / SQLite compatibility
     $formattedMechanics = array_map(function($mech) {
         $max = (int)$mech['max_daily_slots'];
         $booked = (int)$mech['booked_slots'];
@@ -81,11 +80,31 @@ try {
         ];
     }, $mechanics);
 
+    // Check if there is an active promotional discount rule for this date
+    $promoStmt = $db->prepare("
+        SELECT summation_value, discount_percentage 
+        FROM discount_rules 
+        WHERE rule_date = :rule_date AND is_active = 1 
+        LIMIT 1
+    ");
+    $promoStmt->execute([':rule_date' => $dateStr]);
+    $promoRule = $promoStmt->fetch();
+
+    $promoData = null;
+    if ($promoRule) {
+        $promoData = [
+            'has_promo'           => true,
+            'summation_value'     => (int)$promoRule['summation_value'],
+            'discount_percentage' => (float)$promoRule['discount_percentage']
+        ];
+    }
+
     sendJsonResponse([
-        'success'   => true,
-        'date'      => $dateStr,
-        'driver'    => getDbDriver(),
-        'mechanics' => $formattedMechanics
+        'success'        => true,
+        'date'           => $dateStr,
+        'driver'         => getDbDriver(),
+        'mechanics'      => $formattedMechanics,
+        'discount_promo' => $promoData
     ]);
 
 } catch (Throwable $e) {

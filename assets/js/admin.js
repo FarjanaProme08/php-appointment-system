@@ -1,6 +1,7 @@
 /**
  * Admin Panel Client-Side Application
- * Handles appointments table display, filtering, search, and the Edit Appointment modal.
+ * Handles appointments table display, filtering, search, the Edit Appointment modal,
+ * and Date-based Promotional Discount Rules management.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -32,12 +33,81 @@ document.addEventListener('DOMContentLoaded', () => {
     const saveEditBtn = document.getElementById('saveEditBtn');
     const modalAlertBox = document.getElementById('modalAlertBox');
 
+    // Discount Management Elements
+    const toggleDiscountCardBtn = document.getElementById('toggleDiscountCardBtn');
+    const discountSection = document.getElementById('discountManagementSection');
+    const saveDiscountRuleForm = document.getElementById('saveDiscountRuleForm');
+    const discountRuleDate = document.getElementById('discountRuleDate');
+    const discountSummationVal = document.getElementById('discountSummationVal');
+    const discountPercentageVal = document.getElementById('discountPercentageVal');
+    const discountRulesTableBody = document.getElementById('discountRulesTableBody');
+
     // Toast Container
     const toastContainer = document.getElementById('toastContainer');
+
+    // Set default date for discount form to today
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (discountRuleDate) {
+        discountRuleDate.min = todayStr;
+        discountRuleDate.value = todayStr;
+    }
 
     // Load initial data
     loadAppointments();
     loadMechanicsFilterOptions();
+    loadDiscountRules();
+
+    // Toggle Discount Management Card
+    if (toggleDiscountCardBtn && discountSection) {
+        toggleDiscountCardBtn.addEventListener('click', () => {
+            if (discountSection.style.display === 'none') {
+                discountSection.style.display = 'block';
+                discountSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } else {
+                discountSection.style.display = 'none';
+            }
+        });
+    }
+
+    // Save Discount Rule Form Submission
+    if (saveDiscountRuleForm) {
+        saveDiscountRuleForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const dateVal = discountRuleDate.value.trim();
+            const sumVal = parseInt(discountSummationVal.value, 10);
+            const discVal = parseFloat(discountPercentageVal.value);
+
+            if (!dateVal || isNaN(sumVal) || isNaN(discVal)) {
+                showToast('Please fill out all discount rule fields properly.', 'danger', 'Invalid Input');
+                return;
+            }
+
+            try {
+                const res = await fetch('api/manage_discounts.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        action: 'save',
+                        rule_date: dateVal,
+                        summation_value: sumVal,
+                        discount_percentage: discVal,
+                        is_active: 1
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) {
+                    throw new Error(data.message || 'Failed to save discount rule.');
+                }
+
+                showToast(data.message, 'success', 'Discount Rule Saved');
+                loadDiscountRules();
+
+            } catch (err) {
+                console.error(err);
+                showToast(err.message, 'danger', 'Error');
+            }
+        });
+    }
 
     // Event Listeners for Filters
     let debounceTimer = null;
@@ -57,12 +127,86 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     /**
+     * Load Configured Discount Rules
+     */
+    async function loadDiscountRules() {
+        if (!discountRulesTableBody) return;
+
+        try {
+            const res = await fetch('api/manage_discounts.php');
+            const data = await res.json();
+
+            if (!data.success || !data.rules || data.rules.length === 0) {
+                discountRulesTableBody.innerHTML = `
+                    <tr><td colspan="5" class="text-center text-muted py-3">No promotional discount rules set yet.</td></tr>
+                `;
+                return;
+            }
+
+            let html = '';
+            data.rules.forEach(r => {
+                const isActive = (parseInt(r.is_active, 10) === 1);
+                html += `
+                    <tr>
+                        <td><strong>${escapeHtml(r.rule_date)}</strong></td>
+                        <td><span class="license-pill">Sum = ${escapeHtml(r.summation_value)}</span></td>
+                        <td><strong style="color:var(--success);">${escapeHtml(r.discount_percentage)}% OFF</strong></td>
+                        <td>
+                            <span class="badge-status ${isActive ? 'confirmed' : 'cancelled'}" style="font-size:0.7rem;">
+                                ${isActive ? 'Active' : 'Inactive'}
+                            </span>
+                        </td>
+                        <td style="text-align:right;">
+                            <button type="button" class="btn btn-secondary btn-sm delete-discount-btn" data-id="${r.id}" style="color:var(--danger); padding:2px 8px; font-size:0.75rem;" title="Remove Rule">
+                                &times;
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            discountRulesTableBody.innerHTML = html;
+
+            discountRulesTableBody.querySelectorAll('.delete-discount-btn').forEach(btn => {
+                btn.addEventListener('click', () => deleteDiscountRule(btn.dataset.id));
+            });
+
+        } catch (e) {
+            console.error('Error loading discount rules:', e);
+            discountRulesTableBody.innerHTML = `<tr><td colspan="5" class="text-danger text-center">Failed to load rules.</td></tr>`;
+        }
+    }
+
+    /**
+     * Delete Discount Rule
+     */
+    async function deleteDiscountRule(id) {
+        if (!confirm('Are you sure you want to remove this promotional discount rule?')) return;
+
+        try {
+            const res = await fetch('api/manage_discounts.php', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete', id: parseInt(id, 10) })
+            });
+            const data = await res.json();
+            if (!res.ok || !data.success) {
+                throw new Error(data.message || 'Failed to delete rule.');
+            }
+            showToast(data.message, 'success', 'Rule Deleted');
+            loadDiscountRules();
+        } catch (err) {
+            showToast(err.message, 'danger', 'Error');
+        }
+    }
+
+    /**
      * Fetch and render appointments from API
      */
     async function loadAppointments() {
         tableBody.innerHTML = `
             <tr>
-                <td colspan="7" class="text-center py-4" style="padding: 40px 0;">
+                <td colspan="8" class="text-center py-4" style="padding: 40px 0;">
                     <div style="display:flex;align-items:center;justify-content:center;gap:10px;color:var(--gray-500);">
                         <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation: spin 1s linear infinite;">
                             <circle cx="12" cy="12" r="10" stroke-opacity="0.25"></circle>
@@ -87,7 +231,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.message || 'Error loading appointments');
             }
 
-            // Update KPI Stats
             if (data.stats) {
                 if (statTotal) statTotal.textContent = data.stats.total;
                 if (statToday) statToday.textContent = data.stats.today;
@@ -101,7 +244,7 @@ document.addEventListener('DOMContentLoaded', () => {
             console.error('Failed to load appointments:', error);
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="7" class="text-center py-4">
+                    <td colspan="8" class="text-center py-4">
                         <div class="alert alert-danger" style="margin: 20px auto; max-width: 500px;">
                             ${escapeHtml(error.message)}
                         </div>
@@ -113,13 +256,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     /**
      * Render Table Rows
-     * Displays: Client Name, Phone, Car License (Registration) No, Appointment Date, Mechanic Name.
+     * Displays: Client Name, Phone, Car License No, Appointment Date, Mechanic Name, Discount, Status, Actions.
      */
     function renderTableRows(appointments) {
         if (!appointments || appointments.length === 0) {
             tableBody.innerHTML = `
                 <tr>
-                    <td colspan="7">
+                    <td colspan="8">
                         <div class="empty-state">
                             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                                 <circle cx="12" cy="12" r="10"></circle>
@@ -137,6 +280,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let html = '';
         appointments.forEach(app => {
             const statusClass = app.status || 'confirmed';
+            const discount = parseFloat(app.discount_percentage) || 0;
+            const discountBadge = discount > 0 
+                ? `<span style="background:#dcfce7;color:#15803d;font-weight:700;padding:3px 8px;border-radius:9999px;font-size:0.75rem;border:1px solid #bbf7d0;">${discount}% OFF</span>`
+                : `<span style="color:var(--gray-400);font-size:0.85rem;">—</span>`;
 
             html += `
                 <tr data-id="${app.id}">
@@ -165,6 +312,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         </div>
                     </td>
                     <td>
+                        ${discountBadge}
+                    </td>
+                    <td>
                         <span class="badge-status ${statusClass}">${escapeHtml(app.status)}</span>
                     </td>
                     <td>
@@ -190,7 +340,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         tableBody.innerHTML = html;
 
-        // Attach action handlers
         tableBody.querySelectorAll('.edit-btn').forEach(btn => {
             btn.addEventListener('click', () => openEditModal(btn.dataset.id));
         });
@@ -228,7 +377,6 @@ document.addEventListener('DOMContentLoaded', () => {
         editForm.reset();
         modalAppointmentId.value = appointmentId;
 
-        // Show Modal with loading state
         editModal.classList.add('show');
 
         try {
@@ -241,21 +389,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const app = data.appointment;
 
-            // Fill read-only client context
             modalClientName.textContent = app.client_name;
             modalClientPhone.textContent = app.client_phone;
             modalCarLicense.textContent = app.car_license_no;
             modalCarEngine.textContent = app.car_engine_no;
 
-            // Fill editable fields
             modalDateInput.value = app.appointment_date;
             modalStatusSelect.value = app.status;
             modalNotes.value = app.notes || '';
 
-            // Dynamically load available mechanics for this date, excluding this appointment ID
             await loadModalMechanicsAvailability(app.appointment_date, app.mechanic_id, appointmentId);
 
-            // Listen for date change in modal to re-evaluate slots dynamically
             modalDateInput.onchange = () => {
                 if (modalDateInput.value) {
                     loadModalMechanicsAvailability(modalDateInput.value, parseInt(modalMechanicSelect.value, 10), appointmentId);
@@ -307,7 +451,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalMechanicSelect.appendChild(opt);
             });
 
-            // If selected mechanic is full, select default empty
             if (selectedMechanicId && !data.mechanics.find(m => m.id === selectedMechanicId && m.available_slots > 0)) {
                 modalMechanicSelect.value = '';
             } else if (selectedMechanicId) {
@@ -346,7 +489,6 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Set Loading state
         saveEditBtn.disabled = true;
         const origBtnText = saveEditBtn.innerHTML;
         saveEditBtn.innerHTML = `
@@ -381,7 +523,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.message || 'Failed to update appointment.');
             }
 
-            // Success
             closeModal();
             showToast(result.message, 'success', 'Appointment Updated');
             loadAppointments();
@@ -424,9 +565,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /**
-     * Modal Helper Functions
-     */
     function closeModal() {
         editModal.classList.remove('show');
     }
@@ -453,9 +591,6 @@ document.addEventListener('DOMContentLoaded', () => {
         modalAlertBox.innerHTML = '';
     }
 
-    /**
-     * Format date nicely for display
-     */
     function formatDisplayDate(dateStr) {
         if (!dateStr) return '';
         try {
@@ -475,9 +610,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    /**
-     * Toast Notifications
-     */
     function showToast(message, type = 'info', title = '') {
         if (!toastContainer) return;
 

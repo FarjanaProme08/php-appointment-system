@@ -4,7 +4,7 @@
  * Method: POST
  * 
  * Validates user input, checks capacity limits, prevents duplicate bookings,
- * and saves appointment into database using transactions.
+ * calculates phone last 5 digits summation discount rule, and saves appointment.
  */
 
 require_once __DIR__ . '/../config/db.php';
@@ -130,7 +130,6 @@ try {
     $maxDailySlots = (int)$mechanic['max_daily_slots'];
 
     // 4. Rule: Prevent Duplicate Bookings
-    // "Clients cannot book more than once on the same date."
     $dupCheckStmt = $db->prepare("
         SELECT id, client_name, client_phone, car_license_no 
         FROM appointments 
@@ -188,23 +187,55 @@ try {
         ], 409);
     }
 
-    // 6. Insert Appointment
+    // 6. Check Promotional Discount Rule for this date
+    // Rule: if summation of customer's last 5 digits of phone == summation_value, discount is y%
+    $discountPercentage = 0.00;
+    $isDiscountAwarded = false;
+    $customNotification = "";
+
+    $ruleStmt = $db->prepare("
+        SELECT summation_value, discount_percentage 
+        FROM discount_rules 
+        WHERE rule_date = :app_date AND is_active = 1 
+        LIMIT 1
+    ");
+    $ruleStmt->execute([':app_date' => $appointmentDate]);
+    $discountRule = $ruleStmt->fetch();
+
+    if ($discountRule) {
+        $cleanPhoneDigits = preg_replace('/\D/', '', $clientPhone);
+        if (strlen($cleanPhoneDigits) >= 5) {
+            $last5 = substr($cleanPhoneDigits, -5);
+            $digitSum = array_sum(str_split($last5));
+            if ($digitSum === (int)$discountRule['summation_value']) {
+                $discountPercentage = (float)$discountRule['discount_percentage'];
+                $isDiscountAwarded = true;
+                $formattedDiscount = (floor($discountPercentage) == $discountPercentage) ? (int)$discountPercentage : $discountPercentage;
+                // Specific requested notification:
+                // “Booking confirmed you have received y% discount”
+                $customNotification = "Booking confirmed you have received {$formattedDiscount}% discount";
+            }
+        }
+    }
+
+    // 7. Insert Appointment with discount_percentage
     $insertStmt = $db->prepare("
         INSERT INTO appointments 
-        (client_name, client_address, client_phone, car_license_no, car_engine_no, appointment_date, mechanic_id, notes, status)
+        (client_name, client_address, client_phone, car_license_no, car_engine_no, appointment_date, mechanic_id, discount_percentage, notes, status)
         VALUES 
-        (:client_name, :client_address, :client_phone, :car_license_no, :car_engine_no, :appointment_date, :mechanic_id, :notes, 'confirmed')
+        (:client_name, :client_address, :client_phone, :car_license_no, :car_engine_no, :appointment_date, :mechanic_id, :discount_percentage, :notes, 'confirmed')
     ");
 
     $insertStmt->execute([
-        ':client_name'      => $clientName,
-        ':client_address'   => $clientAddress,
-        ':client_phone'     => $clientPhone,
-        ':car_license_no'   => $carLicenseNo,
-        ':car_engine_no'    => $carEngineNo,
-        ':appointment_date' => $appointmentDate,
-        ':mechanic_id'      => $mechanicId,
-        ':notes'            => $notes ?: null
+        ':client_name'          => $clientName,
+        ':client_address'       => $clientAddress,
+        ':client_phone'         => $clientPhone,
+        ':car_license_no'       => $carLicenseNo,
+        ':car_engine_no'        => $carEngineNo,
+        ':appointment_date'     => $appointmentDate,
+        ':mechanic_id'          => $mechanicId,
+        ':discount_percentage'  => $discountPercentage,
+        ':notes'                => $notes ?: null
     ]);
 
     $newAppointmentId = (int)$db->lastInsertId();
@@ -214,18 +245,26 @@ try {
 
     $remainingSlots = $maxDailySlots - ($bookedCount + 1);
 
+    // Final message
+    $finalMessage = $isDiscountAwarded 
+        ? $customNotification 
+        : "Appointment confirmed successfully! Your booking ID is #{$newAppointmentId}.";
+
     sendJsonResponse([
-        'success' => true,
-        'message' => "Appointment confirmed successfully! Your booking ID is #{$newAppointmentId}.",
+        'success'             => true,
+        'message'             => $finalMessage,
+        'discount_applied'    => $isDiscountAwarded,
+        'discount_percentage' => $discountPercentage,
         'appointment' => [
-            'id'               => $newAppointmentId,
-            'client_name'      => $clientName,
-            'client_phone'     => $clientPhone,
-            'car_license_no'   => $carLicenseNo,
-            'appointment_date' => $appointmentDate,
-            'mechanic_id'      => $mechanicId,
-            'mechanic_name'    => $mechanic['name'],
-            'remaining_slots'  => max(0, $remainingSlots)
+            'id'                  => $newAppointmentId,
+            'client_name'         => $clientName,
+            'client_phone'        => $clientPhone,
+            'car_license_no'      => $carLicenseNo,
+            'appointment_date'    => $appointmentDate,
+            'mechanic_id'         => $mechanicId,
+            'mechanic_name'       => $mechanic['name'],
+            'discount_percentage' => $discountPercentage,
+            'remaining_slots'     => max(0, $remainingSlots)
         ]
     ], 201);
 

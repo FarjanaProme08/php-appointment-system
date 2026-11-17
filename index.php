@@ -152,6 +152,9 @@ try {
                                 </div>
                             </div>
 
+                            <!-- Dynamic Promotional Discount Notification Banner -->
+                            <div id="promoNoticeBox" style="display:none; margin-bottom: 20px;"></div>
+
                             <!-- Mechanic Selection with Dynamic Remaining Slots -->
                             <div class="form-group">
                                 <label class="form-label" style="display:flex; justify-content:space-between; align-items:center;">

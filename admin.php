@@ -1,7 +1,7 @@
 <?php
 /**
  * Admin Panel - Car Workshop Appointment System
- * Displays Appointment Table and allows editing Appointment Date and Mechanic
+ * Displays Appointment Table, Date & Mechanic Reassignment, and Promotional Discount Rules
  */
 
 require_once __DIR__ . '/config/db.php';
@@ -78,9 +78,16 @@ try {
             <div class="admin-header">
                 <div>
                     <h1>Appointments Management</h1>
-                    <p class="text-muted">Review client appointments, monitor specialist schedules, and modify dates &amp; assigned mechanics.</p>
+                    <p class="text-muted">Review client appointments, monitor specialist schedules, and configure date-based customer discount rules.</p>
                 </div>
-                <div>
+                <div style="display:flex; gap:10px;">
+                    <button type="button" id="toggleDiscountCardBtn" class="btn btn-secondary">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                            <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                        </svg>
+                        <span>Manage Discounts</span>
+                    </button>
                     <a href="index.php" class="btn btn-primary">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                             <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -153,6 +160,70 @@ try {
                 </div>
             </div>
 
+            <!-- Date-based Promotional Discount Rules Card -->
+            <div id="discountManagementSection" class="card" style="margin-bottom: 24px; border: 1.5px solid #cbd5e1;">
+                <div class="card-header" style="background:#f8fafc;">
+                    <div>
+                        <h3 style="font-size: 1.15rem; font-weight: 700; color: #0f172a; display:flex; align-items:center; gap:8px;">
+                            <span>🎁</span> Promotional Discount Rules (Phone Last 5 Digits Summation Rule)
+                        </h3>
+                        <p class="text-muted text-xs" style="margin:2px 0 0;">
+                            Set a promotional rule for a specific date: If the summation of customer's last 5 phone digits == summation_value, customer receives y% discount.
+                        </p>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 24px; align-items: start;">
+                        <!-- Rule Creation Form -->
+                        <div style="background:#ffffff; border:1px solid var(--gray-200); border-radius:var(--radius-md); padding:16px;">
+                            <h4 style="font-size:0.95rem; font-weight:700; margin-bottom:12px; color:var(--gray-900);">Set Discount Rule for Date</h4>
+                            <form id="saveDiscountRuleForm">
+                                <div class="form-group">
+                                    <label class="form-label text-xs">Promotion Date <span class="required">*</span></label>
+                                    <input type="date" id="discountRuleDate" class="form-control" required>
+                                </div>
+                                <div class="grid grid-2" style="gap:10px;">
+                                    <div class="form-group">
+                                        <label class="form-label text-xs">Summation Value <span class="required">*</span></label>
+                                        <input type="number" id="discountSummationVal" class="form-control" min="0" max="45" placeholder="e.g. 45" required>
+                                        <span class="text-xs text-muted">Sum of last 5 digits (0 - 45)</span>
+                                    </div>
+                                    <div class="form-group">
+                                        <label class="form-label text-xs">Discount % (y%) <span class="required">*</span></label>
+                                        <input type="number" id="discountPercentageVal" class="form-control" min="1" max="100" step="0.5" placeholder="e.g. 5" required>
+                                        <span class="text-xs text-muted">Discount percentage</span>
+                                    </div>
+                                </div>
+                                <button type="submit" id="saveDiscountBtn" class="btn btn-primary btn-block btn-sm" style="margin-top:8px;">
+                                    <span>Save Promotional Rule</span>
+                                </button>
+                            </form>
+                        </div>
+
+                        <!-- Active Rules List Table -->
+                        <div>
+                            <h4 style="font-size:0.95rem; font-weight:700; margin-bottom:12px; color:var(--gray-900);">Configured Date Rules</h4>
+                            <div class="table-responsive" style="max-height: 220px; overflow-y:auto; border:1px solid var(--gray-200); border-radius:var(--radius-md);">
+                                <table class="data-table" style="font-size:0.85rem;">
+                                    <thead>
+                                        <tr>
+                                            <th>Rule Date</th>
+                                            <th>Summation Target</th>
+                                            <th>Discount</th>
+                                            <th>Status</th>
+                                            <th style="text-align:right;">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="discountRulesTableBody">
+                                        <tr><td colspan="5" class="text-center text-muted py-3">Loading rules...</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Filters & Search Toolbar -->
             <div class="filter-card">
                 <form id="filterForm" class="filter-form" onsubmit="return false;">
@@ -201,6 +272,7 @@ try {
                                 <th>Car License No</th>
                                 <th>Appointment Date</th>
                                 <th>Assigned Mechanic</th>
+                                <th>Discount</th>
                                 <th>Status</th>
                                 <th style="text-align: right; padding-right: 24px;">Actions</th>
                             </tr>

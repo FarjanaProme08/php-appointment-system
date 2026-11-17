@@ -65,11 +65,9 @@ function getDbConnection(): PDO {
             return $pdo;
 
         } catch (Throwable $mysqlErr) {
-            // If explicit MySQL mode was forced, throw error
             if ($driverChoice === 'mysql') {
                 throw new Exception('MySQL connection failed: ' . $mysqlErr->getMessage());
             }
-            // In auto mode, record notice and fall back to SQLite below
             error_log('MySQL connection unavailable, falling back to SQLite: ' . $mysqlErr->getMessage());
         }
     }
@@ -88,13 +86,11 @@ function getDbConnection(): PDO {
             PDO::ATTR_EMULATE_PREPARES   => false
         ]);
 
-        // Enable foreign key enforcement and WAL mode for performance & concurrency
         $pdo->exec('PRAGMA foreign_keys = ON;');
         $pdo->exec('PRAGMA journal_mode = WAL;');
 
         $GLOBALS['ACTIVE_DB_DRIVER'] = 'sqlite';
 
-        // Auto-initialize schema and 5 mechanics if not present
         ensureSqliteSchemaInitialized($pdo);
 
         return $pdo;
@@ -105,18 +101,10 @@ function getDbConnection(): PDO {
 }
 
 /**
- * Initializes SQLite tables and seeds the 5 mechanics if tables do not exist
+ * Initializes SQLite tables and seeds mechanics and discount rules if not present
  */
 function ensureSqliteSchemaInitialized(PDO $pdo): void {
-    // Check if mechanics table exists
-    $stmt = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='mechanics'");
-    $exists = $stmt->fetchColumn();
-
-    if ($exists) {
-        return;
-    }
-
-    // 1. Create Mechanics Table
+    // 1. Create Mechanics Table if not exists
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS mechanics (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -128,7 +116,20 @@ function ensureSqliteSchemaInitialized(PDO $pdo): void {
         );
     ");
 
-    // 2. Create Appointments Table
+    // 2. Create Discount Rules Table
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS discount_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_date TEXT NOT NULL UNIQUE,
+            summation_value INTEGER NOT NULL,
+            discount_percentage REAL NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    ");
+
+    // 3. Create Appointments Table
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -139,6 +140,7 @@ function ensureSqliteSchemaInitialized(PDO $pdo): void {
             car_engine_no TEXT NOT NULL,
             appointment_date TEXT NOT NULL,
             mechanic_id INTEGER NOT NULL,
+            discount_percentage REAL NOT NULL DEFAULT 0.00,
             notes TEXT NULL,
             status TEXT NOT NULL DEFAULT 'confirmed',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -147,38 +149,50 @@ function ensureSqliteSchemaInitialized(PDO $pdo): void {
         );
     ");
 
-    // 3. Create Indexes
+    // Ensure discount_percentage column exists in case appointments table was created earlier
+    $cols = $pdo->query("PRAGMA table_info(appointments)")->fetchAll();
+    $hasDiscountCol = false;
+    foreach ($cols as $col) {
+        if ($col['name'] === 'discount_percentage') {
+            $hasDiscountCol = true;
+            break;
+        }
+    }
+    if (!$hasDiscountCol) {
+        $pdo->exec("ALTER TABLE appointments ADD COLUMN discount_percentage REAL NOT NULL DEFAULT 0.00;");
+    }
+
+    // 4. Create Indexes
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_mechanic_date ON appointments (mechanic_id, appointment_date, status);");
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_phone_date ON appointments (client_phone, appointment_date, status);");
     $pdo->exec("CREATE INDEX IF NOT EXISTS idx_license_date ON appointments (car_license_no, appointment_date, status);");
+    $pdo->exec("CREATE INDEX IF NOT EXISTS idx_discount_rule_date ON discount_rules (rule_date, is_active);");
 
-    // 4. Seed the 5 Master Mechanics
-    $pdo->exec("
-        INSERT INTO mechanics (id, name, specialty, max_daily_slots, status) VALUES
-        (1, 'Marcus Vance', 'Master Diagnostics & Engine Specialist', 4, 'active'),
-        (2, 'Sarah Jenkins', 'Transmission & Drivetrain Expert', 4, 'active'),
-        (3, 'David Rodriguez', 'Brake Systems & Suspension Specialist', 4, 'active'),
-        (4, 'Elena Rostova', 'Electrical & Hybrid Systems Technician', 4, 'active'),
-        (5, 'Kenji Tanaka', 'Performance Tuning & General Maintenance', 4, 'active');
-    ");
+    // 5. Seed mechanics if empty
+    $mechCount = (int)$pdo->query("SELECT COUNT(*) FROM mechanics")->fetchColumn();
+    if ($mechCount === 0) {
+        $pdo->exec("
+            INSERT INTO mechanics (id, name, specialty, max_daily_slots, status) VALUES
+            (1, 'Marcus Vance', 'Master Diagnostics & Engine Specialist', 4, 'active'),
+            (2, 'Sarah Jenkins', 'Transmission & Drivetrain Expert', 4, 'active'),
+            (3, 'David Rodriguez', 'Brake Systems & Suspension Specialist', 4, 'active'),
+            (4, 'Elena Rostova', 'Electrical & Hybrid Systems Technician', 4, 'active'),
+            (5, 'Kenji Tanaka', 'Performance Tuning & General Maintenance', 4, 'active');
+        ");
+    }
 
-    // 5. Seed initial sample appointments
-    $today = date('Y-m-d');
-    $tomorrow = date('Y-m-d', strtotime('+1 day'));
-
-    $seedStmt = $pdo->prepare("
-        INSERT INTO appointments 
-        (client_name, client_address, client_phone, car_license_no, car_engine_no, appointment_date, mechanic_id, notes, status)
-        VALUES 
-        ('Arthur Pendelton', '742 Evergreen Terrace, Springfield', '5550192834', 'ABC-1234', '98451203', :today, 1, 'Periodic 10k mile maintenance', 'confirmed'),
-        ('Beatrice Miller', '12 Oak Ridge Blvd, Maplewood', '5550183921', 'XYZ-9876', '45812930', :today, 1, 'Engine check light diagnostic', 'confirmed'),
-        ('Charles Sterling', '88 Riverbend Way, Austin', '5550174829', 'TEX-4421', '12093847', :today, 2, 'Transmission fluid flush', 'confirmed'),
-        ('Diana Prince', '350 Fifth Ave, Metropolis', '5550165738', 'NY-7800', '88392019', :today, 3, 'Ceramic brake pad replacement', 'confirmed'),
-        ('Ethan Hunt', '100 Mission St, San Francisco', '5550156647', 'CA-0077', '73629104', :tomorrow, 1, 'Suspension noise diagnosis', 'confirmed'),
-        ('Fiona Gallagher', '211 North Side Lane, Chicago', '5550147556', 'IL-5542', '66201948', :tomorrow, 2, 'Clutch adjustment and inspection', 'confirmed');
-    ");
-
-    $seedStmt->execute([':today' => $today, ':tomorrow' => $tomorrow]);
+    // 6. Seed initial discount rules if empty
+    $ruleCount = (int)$pdo->query("SELECT COUNT(*) FROM discount_rules")->fetchColumn();
+    if ($ruleCount === 0) {
+        $today = date('Y-m-d');
+        $tomorrow = date('Y-m-d', strtotime('+1 day'));
+        $seedRuleStmt = $pdo->prepare("
+            INSERT OR IGNORE INTO discount_rules (rule_date, summation_value, discount_percentage, is_active) VALUES
+            (:today, 45, 5.00, 1),
+            (:tomorrow, 25, 10.00, 1)
+        ");
+        $seedRuleStmt->execute([':today' => $today, ':tomorrow' => $tomorrow]);
+    }
 }
 
 /**

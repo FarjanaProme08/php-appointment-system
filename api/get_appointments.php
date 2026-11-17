@@ -54,6 +54,7 @@ try {
             a.car_engine_no,
             a.appointment_date,
             a.mechanic_id,
+            COALESCE(a.discount_percentage, 0.00) AS discount_percentage,
             a.status,
             a.notes,
             a.created_at,

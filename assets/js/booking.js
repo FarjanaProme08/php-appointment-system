@@ -1,6 +1,6 @@
 /**
  * Booking Portal Client-Side Application
- * Handles dynamic mechanic slot fetching, client-side validation, and AJAX submission.
+ * Handles dynamic mechanic slot fetching, client-side validation, promotional discounts, and AJAX submission.
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -11,6 +11,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const submitBtn = document.getElementById('submitBookingBtn');
     const confirmationBox = document.getElementById('bookingConfirmation');
     const toastContainer = document.getElementById('toastContainer');
+    const promoNoticeBox = document.getElementById('promoNoticeBox');
 
     // Restrict date picker: Minimum date is today
     const today = new Date();
@@ -24,10 +25,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!dateInput.value) {
             dateInput.value = todayFormatted;
         }
-        // Initial fetch of mechanics for today's date
+        // Initial fetch of mechanics & promo for today's date
         fetchMechanicsAvailability(dateInput.value);
 
-        // Listen for date change to dynamically update available slots
+        // Listen for date change to dynamically update available slots & promo
         dateInput.addEventListener('change', () => {
             clearFieldError(dateInput);
             if (dateInput.value) {
@@ -43,7 +44,6 @@ document.addEventListener('DOMContentLoaded', () => {
     [phoneInput, engineInput].forEach(input => {
         if (!input) return;
         input.addEventListener('input', (e) => {
-            // Replace any non-digit character immediately
             const cleaned = e.target.value.replace(/\D/g, '');
             if (e.target.value !== cleaned) {
                 e.target.value = cleaned;
@@ -60,7 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     /**
-     * Fetch mechanics and their available slots from API
+     * Fetch mechanics, remaining slots, and active discount promo from API
      */
     async function fetchMechanicsAvailability(dateStr) {
         if (!mechanicsContainer) return;
@@ -83,6 +83,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(data.message || 'Unable to retrieve mechanics.');
             }
 
+            // 1. Render promotional discount notice if active on this date
+            renderPromoNotice(data.discount_promo);
+
+            // 2. Render mechanics cards
             renderMechanics(data.mechanics);
 
         } catch (error) {
@@ -93,6 +97,31 @@ document.addEventListener('DOMContentLoaded', () => {
                     <button type="button" class="btn btn-sm btn-secondary mt-2" onclick="location.reload()">Retry</button>
                 </div>
             `;
+        }
+    }
+
+    /**
+     * Render Promotional Discount Notice Banner
+     */
+    function renderPromoNotice(promo) {
+        if (!promoNoticeBox) return;
+
+        if (promo && promo.has_promo) {
+            promoNoticeBox.innerHTML = `
+                <div style="background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 1.5px solid #f59e0b; border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; gap: 14px;">
+                    <div style="font-size: 1.6rem; flex-shrink: 0;">🎁</div>
+                    <div>
+                        <strong style="color: #92400e; font-size: 0.95rem; display: block;">Special Promotion for this Date!</strong>
+                        <span style="color: #78350f; font-size: 0.85rem; line-height: 1.4; display: block;">
+                            If the summation of your phone number's <strong>last 5 digits</strong> equals <strong>${promo.summation_value}</strong>, you will receive a <strong>${promo.discount_percentage}% discount</strong> on your booking!
+                        </span>
+                    </div>
+                </div>
+            `;
+            promoNoticeBox.style.display = 'block';
+        } else {
+            promoNoticeBox.style.display = 'none';
+            promoNoticeBox.innerHTML = '';
         }
     }
 
@@ -115,7 +144,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const isSelected = (mech.id === currentlySelectedId) && !isFull;
             if (isSelected) selectedStillValid = true;
 
-            // Slot badge styling
             let badgeClass = 'badge-available';
             let badgeText = `${mech.available_slots} / ${mech.max_daily_slots} slots available`;
 
@@ -154,12 +182,10 @@ document.addEventListener('DOMContentLoaded', () => {
         html += '</div>';
         mechanicsContainer.innerHTML = html;
 
-        // If the previously selected mechanic is now full, reset selection
         if (!selectedStillValid && currentlySelectedId) {
             mechanicIdHidden.value = '';
         }
 
-        // Add click events to mechanic cards
         const cards = mechanicsContainer.querySelectorAll('.mechanic-card:not(.disabled)');
         cards.forEach(card => {
             card.addEventListener('click', () => {
@@ -301,9 +327,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return isValid;
     }
 
-    /**
-     * Show Inline Field Error
-     */
     function showFieldError(inputElement, message) {
         inputElement.classList.add('is-invalid');
         const parent = inputElement.closest('.form-group') || inputElement.parentElement;
@@ -317,9 +340,6 @@ document.addEventListener('DOMContentLoaded', () => {
         feedback.style.display = 'block';
     }
 
-    /**
-     * Clear Inline Field Error
-     */
     function clearFieldError(inputElement) {
         inputElement.classList.remove('is-invalid');
         const parent = inputElement.closest('.form-group') || inputElement.parentElement;
@@ -336,13 +356,11 @@ document.addEventListener('DOMContentLoaded', () => {
     bookingForm.addEventListener('submit', async (e) => {
         e.preventDefault();
 
-        // Run client validation
         if (!validateForm()) {
             showToast('Please fix the highlighted form errors before proceeding.', 'danger', 'Validation Error');
             return;
         }
 
-        // Set Loading State
         submitBtn.disabled = true;
         const originalBtnText = submitBtn.innerHTML;
         submitBtn.innerHTML = `
@@ -377,7 +395,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const result = await response.json();
 
             if (!response.ok || !result.success) {
-                // If server returned specific field errors
                 if (result.errors) {
                     Object.entries(result.errors).forEach(([field, msg]) => {
                         const targetInput = document.querySelector(`[name="${field}"]`) || 
@@ -391,11 +408,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(result.message || 'Booking submission failed.');
             }
 
-            // Success Handling
-            showToast(result.message, 'success', 'Appointment Confirmed!');
+            // Success Handling with Discount Notification
+            const toastTitle = result.discount_applied ? '🎉 Discount Awarded!' : 'Appointment Confirmed!';
+            showToast(result.message, 'success', toastTitle);
 
             // Display Confirmation Summary Card
-            displayConfirmationCard(result.appointment);
+            displayConfirmationCard(result.appointment, result.discount_applied, result.message);
 
             // Reset Form fields
             bookingForm.reset();
@@ -418,13 +436,26 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     /**
-     * Render Appointment Confirmation Box
+     * Render Appointment Confirmation Box with Discount Notification
      */
-    function displayConfirmationCard(app) {
+    function displayConfirmationCard(app, discountApplied, notificationMsg) {
         if (!confirmationBox) return;
 
+        let discountBannerHtml = '';
+        if (discountApplied && app.discount_percentage > 0) {
+            discountBannerHtml = `
+                <div style="background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border: 1.5px solid #10b981; border-radius: 8px; padding: 14px 18px; margin-bottom: 18px; display: flex; align-items: center; gap: 14px;">
+                    <span style="font-size: 1.8rem;">🎉</span>
+                    <div>
+                        <strong style="color: #065f46; font-size: 1.05rem; display: block;">${escapeHtml(notificationMsg)}</strong>
+                        <span style="color: #047857; font-size: 0.85rem;">Phone last 5-digit summation rule matched! Your discount has been locked into this booking.</span>
+                    </div>
+                </div>
+            `;
+        }
+
         confirmationBox.innerHTML = `
-            <div class="card" style="border-left: 6px solid var(--success); margin-bottom: 28px; background: #ffffff;">
+            <div class="card" style="border-left: 6px solid ${discountApplied ? '#10b981' : 'var(--success)'}; margin-bottom: 28px; background: #ffffff;">
                 <div class="card-body">
                     <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
                         <div style="width: 44px; height: 44px; border-radius: 50%; background: #dcfce7; color: #166534; display: flex; align-items: center; justify-content: center; font-size: 1.3rem;">
@@ -435,6 +466,9 @@ document.addEventListener('DOMContentLoaded', () => {
                             <p class="text-muted text-sm" style="margin: 0;">Booking Reference: <strong>#${app.id}</strong></p>
                         </div>
                     </div>
+
+                    ${discountBannerHtml}
+
                     <div style="background: var(--gray-50); border-radius: var(--radius-md); padding: 16px; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; font-size: 0.875rem;">
                         <div>
                             <span class="text-muted text-xs font-semibold" style="text-transform: uppercase; display: block;">Client</span>
@@ -452,6 +486,12 @@ document.addEventListener('DOMContentLoaded', () => {
                             <span class="text-muted text-xs font-semibold" style="text-transform: uppercase; display: block;">Assigned Mechanic</span>
                             <strong>${escapeHtml(app.mechanic_name)}</strong>
                         </div>
+                        ${discountApplied ? `
+                        <div>
+                            <span class="text-muted text-xs font-semibold" style="text-transform: uppercase; display: block;">Discount Rate</span>
+                            <span style="background:#dcfce7; color:#15803d; font-weight:700; padding:3px 8px; border-radius:4px; font-size:0.85rem;">${app.discount_percentage}% OFF</span>
+                        </div>
+                        ` : ''}
                     </div>
                     <p class="text-muted text-xs" style="margin-top: 14px;">
                         Please bring your vehicle to the workshop on the scheduled date before 9:00 AM. Thank you for choosing Apex Auto Workshop!
@@ -484,7 +524,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         toastContainer.appendChild(toast);
 
-        // Auto remove after 6 seconds
         setTimeout(() => {
             if (toast.parentElement) {
                 toast.style.transition = 'opacity 0.3s ease';
@@ -501,13 +540,3 @@ document.addEventListener('DOMContentLoaded', () => {
         return div.innerHTML;
     }
 });
-
-// Add Keyframe for spinner animation
-const styleSheet = document.createElement("style");
-styleSheet.innerText = `
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
-}
-`;
-document.head.appendChild(styleSheet);
